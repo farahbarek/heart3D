@@ -1,0 +1,2 @@
+# Phase 6 integration dependencies are provided by the official monai-physio install.
+pytest>=8.0
