@@ -8,6 +8,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls } from '@react-three/drei';
 
 const chartData = [
   { name: 'Jan', volume: 40 },
@@ -18,24 +20,74 @@ const chartData = [
   { name: 'Jun', volume: 68 },
 ];
 
+function LungModel() {
+  return (
+    <group position={[0, -0.05, 0]}>
+      {/* Illustrative lung-shaped forms, not reconstructed from a patient scan. */}
+      <mesh position={[-0.68, -0.05, 0]} scale={[0.72, 1.18, 0.48]}>
+        <sphereGeometry args={[1, 48, 48]} />
+        <meshStandardMaterial color="#ef7185" roughness={0.48} />
+      </mesh>
+      <mesh position={[0.68, -0.05, 0]} scale={[0.72, 1.18, 0.48]}>
+        <sphereGeometry args={[1, 48, 48]} />
+        <meshStandardMaterial color="#f28a98" roughness={0.48} />
+      </mesh>
+
+      {/* Trachea and main bronchi are diagrammatic details. */}
+      <mesh position={[0, 0.95, 0]}>
+        <cylinderGeometry args={[0.14, 0.18, 0.72, 24]} />
+        <meshStandardMaterial color="#f5b7a8" roughness={0.4} />
+      </mesh>
+      <mesh position={[-0.25, 0.48, 0]} rotation={[0, 0, -0.65]}>
+        <cylinderGeometry args={[0.09, 0.13, 0.68, 20]} />
+        <meshStandardMaterial color="#f5b7a8" roughness={0.4} />
+      </mesh>
+      <mesh position={[0.25, 0.48, 0]} rotation={[0, 0, 0.65]}>
+        <cylinderGeometry args={[0.09, 0.13, 0.68, 20]} />
+        <meshStandardMaterial color="#f5b7a8" roughness={0.4} />
+      </mesh>
+    </group>
+  );
+}
+
+function LungViewer() {
+  return (
+    <div className="relative h-80 w-full overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-100 via-white to-slate-100">
+      <Canvas camera={{ position: [0, 0, 5], fov: 40 }} dpr={[1, 2]}>
+        <color attach="background" args={['#f1f8fc']} />
+        <ambientLight intensity={1.4} />
+        <directionalLight position={[3, 4, 5]} intensity={2} />
+        <directionalLight position={[-4, 1, -3]} intensity={0.8} color="#93c5fd" />
+        <LungModel />
+        <OrbitControls enablePan enableZoom enableRotate minDistance={2.8} maxDistance={8} />
+      </Canvas>
+      <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg bg-white/80 px-3 py-1.5 text-xs text-slate-600 shadow">
+        Modèle 3D illustratif · glisser pour tourner · molette pour zoomer
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [health, setHealth] = useState<any>(null);
 
   useEffect(() => {
     fetch('http://localhost:8000/api/health')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('Backend unavailable');
+        return res.json();
+      })
       .then((data) => setHealth(data))
       .catch(() => setHealth({ status: 'offline', service: 'backend not running' }));
   }, []);
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
-      <aside className="fixed left-0 top-0 h-screen w-72 bg-medical-900 text-white p-6">
+      <aside className="fixed left-0 top-0 h-screen w-72 bg-medical-900 p-6 text-white">
         <div className="mb-10">
           <p className="text-xs uppercase tracking-[0.2em] text-sky-300">Medical AI</p>
           <h1 className="mt-2 text-2xl font-semibold">Digital Twin</h1>
         </div>
-
         <nav className="space-y-2">
           {['Dashboard', 'Patients', 'Medical Imaging', 'AI Segmentation', '3D Reconstruction', 'Digital Twin Simulation', 'Results & Reports', 'Settings'].map((item, index) => (
             <button
@@ -78,18 +130,11 @@ export default function App() {
 
         <section className="mt-8 grid gap-6 xl:grid-cols-[1.7fr_1fr]">
           <div className="rounded-2xl bg-white p-6 shadow-soft">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-500">3D respiratory model preview</p>
-                <h3 className="text-xl font-semibold">Lung anatomy</h3>
-              </div>
-              <button className="rounded-xl bg-medical-500 px-4 py-2 text-white">Run simulation</button>
+            <div className="mb-4">
+              <p className="text-sm text-slate-500">Aperçu anatomique interactif</p>
+              <h3 className="text-xl font-semibold">Poumons — vue 3D</h3>
             </div>
-            <div className="h-72 rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-100 via-white to-slate-100 flex items-center justify-center">
-              <div className="flex h-48 w-48 items-center justify-center rounded-full border-8 border-sky-300 bg-sky-200/50 shadow-inner text-xl font-bold text-medical-700">
-                3D
-              </div>
-            </div>
+            <LungViewer />
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-soft">
@@ -100,7 +145,7 @@ export default function App() {
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-medical-100 text-sm font-semibold text-medical-700">
                     {idx + 1}
                   </div>
-                  <div className="flex-1 h-2 rounded-full bg-slate-100">
+                  <div className="h-2 flex-1 rounded-full bg-slate-100">
                     <div className={`h-2 rounded-full ${idx < 4 ? 'w-full bg-medical-500' : 'w-1/3 bg-slate-200'}`} />
                   </div>
                 </div>
