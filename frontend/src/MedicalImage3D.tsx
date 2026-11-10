@@ -55,8 +55,10 @@ function SliceStack({ series }: { series: SeriesResponse }) {
   const positions = series.slices.map((slice) => slice.position);
   const firstPosition = Math.min(...positions);
   const lastPosition = Math.max(...positions);
-  const depth = Math.max(lastPosition - firstPosition, sliceSpacing);
-  const scale = 2.8 / Math.max(imageWidth, imageHeight, depth);
+  const measuredDepth = Math.max(lastPosition - firstPosition, sliceSpacing);
+  const displayDepth = Math.max(measuredDepth, Math.max(imageWidth, imageHeight) * 0.18);
+  const scale = 2.8 / Math.max(imageWidth, imageHeight, displayDepth);
+  const depthScale = measuredDepth > 0 ? displayDepth / measuredDepth : 1;
   const centerPosition = (firstPosition + lastPosition) / 2;
 
   return (
@@ -67,7 +69,7 @@ function SliceStack({ series }: { series: SeriesResponse }) {
             slice={slice}
             width={imageWidth * scale}
             height={imageHeight * scale}
-            z={(slice.position - centerPosition) * scale}
+            z={(slice.position - centerPosition) * depthScale * scale}
           />
         </Suspense>
       ))}
@@ -149,7 +151,7 @@ export default function MedicalImage3D() {
       </div>
 
       <div className="relative h-80 w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-        <Canvas camera={{ position: [0, 0, 5], fov: 40 }} dpr={[1, 2]}>
+        <Canvas camera={{ position: [3, 2, 5], fov: 40 }} dpr={[1, 2]}>
           <color attach="background" args={['#111827']} />
           <ambientLight intensity={1.5} />
           <directionalLight position={[3, 4, 5]} intensity={1.5} />
@@ -183,7 +185,7 @@ export default function MedicalImage3D() {
 
       {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
       {series && <p className="mt-2 text-xs text-slate-500">{seriesList.length} série(s) importée(s). Affichage : {series.series_description || series.series_id}. Fais glisser pour tourner et utilise la molette pour zoomer.</p>}
-      <p className="mt-2 text-xs text-amber-800">Prototype de visualisation des coupes DICOM empilées ; il ne réalise pas de segmentation ni de diagnostic médical.</p>
+      <p className="mt-2 text-xs text-amber-800">Pile de coupes DICOM en aperçu 3D ; pour les séries courtes, l’épaisseur affichée est accentuée et ne correspond pas à l’échelle réelle. Pas de segmentation ni de diagnostic médical.</p>
     </section>
   );
 }
