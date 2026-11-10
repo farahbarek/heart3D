@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import base64
+import io
+import math
+import uuid
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+import numpy as np
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Pulmonary Digital Twin API", version="0.1.0")
+app = FastAPI(title="Pulmonary Digital Twin API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+MAX_SERIES_FILES = 200
+MAX_FILE_BYTES = 64 * 1024 * 1024
+MAX_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_PREVIEW_EDGE = 512
 
 
 class PatientCreate(BaseModel):
@@ -49,7 +59,7 @@ class SegmentationRequest(BaseModel):
 class SimulationRequest(BaseModel):
     patient_id: str
     model_name: str = "lung-respiratory-demo"
-    stages: list[float] = [0.0, 0.25, 0.5, 0.75, 1.0]
+    stages: list[float] = Field(default_factory=lambda: [0.0, 0.25, 0.5, 0.75, 1.0])
 
 
 patients_db: list[PatientRecord] = [
@@ -66,26 +76,63 @@ imaging_db: dict[str, ImagingRecord] = {
         dimensions=[256, 256, 80],
     )
 }
+segmentation_db: dict[str, Any] = {}
+simulation_db: dict[str, Any] = {}
 
-segmentation_db: dict[str, Any] = {
-    "SEG-001": {
-        "id": "SEG-001",
-        "patient_id": "P-001",
-        "status": "completed",
-        "model_name": "monai-default-segmentation",
-        "dice_score": 0.94,
-    }
-}
 
-simulation_db: dict[str, Any] = {
-    "SIM-001": {
-        "id": "SIM-001",
-        "patient_id": "P-001",
-        "status": "completed",
-        "model_name": "lung-respiratory-demo",
-        "stages": [0.0, 0.25, 0.5, 0.75, 1.0],
-    }
-}
+def _dicom_position(ds: Any) -> tuple[float, float, float]:
+    position = getattr(ds, "ImagePositionPatient", None)
+    if position is None:
+        instance = float(getattr(ds, "InstanceNumber", 0))
+        return (0.0, 0.0, instance)
+    return tuple(float(value) for value in position[:3])
+
+
+def _sort_key(ds: Any) -> float:
+    position = _dicom_position(ds)
+    orientation = getattr(ds, "ImageOrientationPatient", None)
+    if orientation is not None and len(orientation) >= 6:
+        row = np.asarray(orientation[:3], dtype=np.float64)
+        column = np.asarray(orientation[3:6], dtype=np.float64)
+        normal = np.cross(row, column)
+        return float(np.dot(np.asarray(position), normal))
+    return position[2]
+
+
+def _preview_png(ds: Any) -> str:
+    from PIL import Image
+
+    pixels = np.asarray(ds.pixel_array)
+    if pixels.ndim != 2:
+        raise ValueError("Seules les images DICOM monochromes 2D sont prises en charge.")
+
+    pixels = pixels.astype(np.float32)
+    slope = float(getattr(ds, "RescaleSlope", 1.0))
+    intercept = float(getattr(ds, "RescaleIntercept", 0.0))
+    pixels = pixels * slope + intercept
+
+    center = getattr(ds, "WindowCenter", None)
+    width = getattr(ds, "WindowWidth", None)
+    if center is not None and width is not None:
+        center_value = float(center[0] if hasattr(center, "__len__") else center)
+        width_value = max(1.0, float(width[0] if hasattr(width, "__len__") else width))
+        low, high = center_value - width_value / 2, center_value + width_value / 2
+    else:
+        low, high = (float(v) for v in np.percentile(pixels, [1, 99]))
+        if high <= low:
+            low, high = float(np.min(pixels)), float(np.max(pixels))
+        if high <= low:
+            high = low + 1.0
+
+    pixels = np.clip((pixels - low) * (255.0 / (high - low)), 0, 255).astype(np.uint8)
+    if str(getattr(ds, "PhotometricInterpretation", "MONOCHROME2")) == "MONOCHROME1":
+        pixels = 255 - pixels
+
+    image = Image.fromarray(pixels, mode="L")
+    image.thumbnail((MAX_PREVIEW_EDGE, MAX_PREVIEW_EDGE))
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
 
 
 @app.get("/api/health")
@@ -102,38 +149,114 @@ def get_patients() -> list[PatientRecord]:
 def create_patient(payload: PatientCreate) -> PatientRecord:
     if any(patient.id == payload.patient_id for patient in patients_db):
         raise HTTPException(status_code=400, detail="Patient already exists.")
-
-    patient = PatientRecord(
-        id=payload.patient_id,
-        name=payload.name,
-        age=payload.age,
-        sex=payload.sex,
-    )
+    patient = PatientRecord(id=payload.patient_id, name=payload.name, age=payload.age, sex=payload.sex)
     patients_db.append(patient)
     return patient
 
 
 @app.post("/api/imaging/upload")
 async def upload_image(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Legacy single-file metadata endpoint. Use /api/imaging/series for DICOM stacks."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided.")
-
     lower = file.filename.lower()
     if not (lower.endswith(".nii") or lower.endswith(".nii.gz") or lower.endswith(".dcm") or lower.endswith(".mha")):
         raise HTTPException(status_code=400, detail="Unsupported image format.")
-
     image_id = f"IMG-{len(imaging_db) + 1:03d}"
     record = ImagingRecord(
         id=image_id,
         patient_id="P-001",
         file_name=file.filename,
         file_type="nifti" if lower.endswith((".nii", ".nii.gz")) else "dicom",
-        dimensions=[256, 256, 80],
+        dimensions=[],
     )
     imaging_db[image_id] = record
+    return {"message": "Image metadata registered; this legacy endpoint does not reconstruct a volume.", "image": record}
+
+
+@app.post("/api/imaging/series")
+async def upload_dicom_series(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    """Read an uploaded DICOM series in memory and return ordered, browser-ready slice previews."""
+    if not files:
+        raise HTTPException(status_code=400, detail="Sélectionnez une série de fichiers DICOM.")
+    if len(files) > MAX_SERIES_FILES:
+        raise HTTPException(status_code=413, detail=f"La série dépasse la limite de {MAX_SERIES_FILES} coupes.")
+
+    try:
+        import pydicom
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail="Dépendance pydicom manquante. Installez backend/requirements.txt.") from exc
+
+    parsed: list[tuple[Any, str]] = []
+    total_bytes = 0
+    series_uids: set[str] = set()
+    dimensions: set[tuple[int, int]] = set()
+    try:
+        for upload in files:
+            if not upload.filename:
+                continue
+            raw = await upload.read(MAX_FILE_BYTES + 1)
+            if not raw:
+                continue
+            if len(raw) > MAX_FILE_BYTES:
+                raise HTTPException(status_code=413, detail=f"Le fichier {upload.filename} dépasse 64 Mo.")
+            total_bytes += len(raw)
+            if total_bytes > MAX_TOTAL_BYTES:
+                raise HTTPException(status_code=413, detail="La série dépasse la limite totale de 256 Mo.")
+            try:
+                ds = pydicom.dcmread(io.BytesIO(raw), force=False)
+                if not hasattr(ds, "PixelData"):
+                    continue
+                if int(getattr(ds, "SamplesPerPixel", 1)) != 1:
+                    raise ValueError("Les coupes couleur ou multi-échantillons ne sont pas prises en charge.")
+                rows, columns = int(ds.Rows), int(ds.Columns)
+                parsed.append((ds, upload.filename))
+                dimensions.add((rows, columns))
+                uid = str(getattr(ds, "SeriesInstanceUID", ""))
+                if uid:
+                    series_uids.add(uid)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Fichier DICOM invalide ({upload.filename}) : {exc}") from exc
+            finally:
+                await upload.close()
+    finally:
+        for upload in files:
+            if not upload.file.closed:
+                await upload.close()
+
+    if not parsed:
+        raise HTTPException(status_code=400, detail="Aucun fichier DICOM avec pixels n’a été trouvé.")
+    if len(series_uids) > 1:
+        raise HTTPException(status_code=400, detail="Les fichiers sélectionnés appartiennent à plusieurs séries DICOM.")
+    if len(dimensions) != 1:
+        raise HTTPException(status_code=400, detail="Les coupes n’ont pas toutes les mêmes dimensions.")
+
+    parsed.sort(key=lambda item: _sort_key(item[0]))
+    rows, columns = next(iter(dimensions))
+    spacing = getattr(parsed[0][0], "PixelSpacing", [1.0, 1.0])
+    slice_positions = [_sort_key(ds) for ds, _ in parsed]
+    gaps = [abs(b - a) for a, b in zip(slice_positions, slice_positions[1:]) if abs(b - a) > 1e-5]
+    slice_spacing = float(np.median(gaps)) if gaps else float(getattr(parsed[0][0], "SliceThickness", 1.0))
+
+    slices: list[dict[str, Any]] = []
+    for ds, filename in parsed:
+        try:
+            slices.append({"file_name": filename, "position": _sort_key(ds), "image_data": _preview_png(ds)})
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Impossible de décoder les pixels de {filename}. Vérifiez la compression DICOM et ses codecs : {exc}",
+            ) from exc
+
     return {
-        "message": "Image uploaded successfully.",
-        "image": record,
+        "series_id": f"SER-{uuid.uuid4().hex[:12]}",
+        "file_count": len(slices),
+        "dimensions": [columns, rows, len(slices)],
+        "spacing_mm": [float(spacing[0]), float(spacing[1]), slice_spacing],
+        "slices": slices,
+        "notice": "Aperçu de visualisation uniquement ; pas un outil de diagnostic médical.",
     }
 
 
@@ -150,10 +273,10 @@ def run_segmentation(payload: SegmentationRequest) -> dict[str, Any]:
     result = {
         "id": seg_id,
         "patient_id": payload.patient_id,
-        "status": "completed",
+        "status": "demo_only",
         "model_name": payload.model_name,
         "use_synthetic_data": payload.use_synthetic_data,
-        "dice_score": 0.93,
+        "message": "Aucun modèle de segmentation médicale n’est exécuté par ce prototype.",
     }
     segmentation_db[seg_id] = result
     return result
@@ -168,11 +291,7 @@ def get_segmentation(seg_id: str) -> dict[str, Any]:
 
 @app.post("/api/reconstruction/3d")
 def reconstruction_3d() -> dict[str, Any]:
-    return {
-        "status": "completed",
-        "model_format": "stl",
-        "output_path": "outputs/lung_model.stl",
-    }
+    return {"status": "not_configured", "message": "Importez une série DICOM via /api/imaging/series pour obtenir son volume de prévisualisation."}
 
 
 @app.post("/api/simulation/respiratory")
@@ -181,9 +300,10 @@ def run_synthetic_simulation(payload: SimulationRequest) -> dict[str, Any]:
     result = {
         "id": sim_id,
         "patient_id": payload.patient_id,
-        "status": "completed",
+        "status": "demo_only",
         "model_name": payload.model_name,
         "stages": payload.stages,
+        "message": "Simulation illustrative ; aucun résultat physiologique n’est calculé.",
     }
     simulation_db[sim_id] = result
     return result
