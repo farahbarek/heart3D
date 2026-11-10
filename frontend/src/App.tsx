@@ -8,8 +8,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import MedicalImage3D from './MedicalImage3D';
 
 const chartData = [
   { name: 'Jan', volume: 40 },
@@ -19,54 +18,6 @@ const chartData = [
   { name: 'May', volume: 71 },
   { name: 'Jun', volume: 68 },
 ];
-
-function LungModel() {
-  return (
-    <group position={[0, -0.05, 0]}>
-      {/* Illustrative lung-shaped forms, not reconstructed from a patient scan. */}
-      <mesh position={[-0.68, -0.05, 0]} scale={[0.72, 1.18, 0.48]}>
-        <sphereGeometry args={[1, 48, 48]} />
-        <meshStandardMaterial color="#ef7185" roughness={0.48} />
-      </mesh>
-      <mesh position={[0.68, -0.05, 0]} scale={[0.72, 1.18, 0.48]}>
-        <sphereGeometry args={[1, 48, 48]} />
-        <meshStandardMaterial color="#f28a98" roughness={0.48} />
-      </mesh>
-
-      {/* Trachea and main bronchi are diagrammatic details. */}
-      <mesh position={[0, 0.95, 0]}>
-        <cylinderGeometry args={[0.14, 0.18, 0.72, 24]} />
-        <meshStandardMaterial color="#f5b7a8" roughness={0.4} />
-      </mesh>
-      <mesh position={[-0.25, 0.48, 0]} rotation={[0, 0, -0.65]}>
-        <cylinderGeometry args={[0.09, 0.13, 0.68, 20]} />
-        <meshStandardMaterial color="#f5b7a8" roughness={0.4} />
-      </mesh>
-      <mesh position={[0.25, 0.48, 0]} rotation={[0, 0, 0.65]}>
-        <cylinderGeometry args={[0.09, 0.13, 0.68, 20]} />
-        <meshStandardMaterial color="#f5b7a8" roughness={0.4} />
-      </mesh>
-    </group>
-  );
-}
-
-function LungViewer() {
-  return (
-    <div className="relative h-80 w-full overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-sky-100 via-white to-slate-100">
-      <Canvas camera={{ position: [0, 0, 5], fov: 40 }} dpr={[1, 2]}>
-        <color attach="background" args={['#f1f8fc']} />
-        <ambientLight intensity={1.4} />
-        <directionalLight position={[3, 4, 5]} intensity={2} />
-        <directionalLight position={[-4, 1, -3]} intensity={0.8} color="#93c5fd" />
-        <LungModel />
-        <OrbitControls enablePan enableZoom enableRotate minDistance={2.8} maxDistance={8} />
-      </Canvas>
-      <div className="pointer-events-none absolute bottom-3 left-3 rounded-lg bg-white/80 px-3 py-1.5 text-xs text-slate-600 shadow">
-        Modèle 3D illustratif · glisser pour tourner · molette pour zoomer
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [health, setHealth] = useState<any>(null);
@@ -130,11 +81,7 @@ export default function App() {
 
         <section className="mt-8 grid gap-6 xl:grid-cols-[1.7fr_1fr]">
           <div className="rounded-2xl bg-white p-6 shadow-soft">
-            <div className="mb-4">
-              <p className="text-sm text-slate-500">Aperçu anatomique interactif</p>
-              <h3 className="text-xl font-semibold">Poumons — vue 3D</h3>
-            </div>
-            <LungViewer />
+            <MedicalImage3D />
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow-soft">
