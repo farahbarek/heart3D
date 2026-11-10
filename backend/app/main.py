@@ -187,10 +187,8 @@ async def upload_dicom_series(files: list[UploadFile] = File(...)) -> dict[str, 
     except ImportError as exc:
         raise HTTPException(status_code=500, detail="Dépendance pydicom manquante. Installez backend/requirements.txt.") from exc
 
-    parsed: list[tuple[Any, str]] = []
+    parsed: dict[str, list[tuple[Any, str]]] = {}
     total_bytes = 0
-    series_uids: set[str] = set()
-    dimensions: set[tuple[int, int]] = set()
     try:
         for upload in files:
             if not upload.filename:
@@ -209,12 +207,8 @@ async def upload_dicom_series(files: list[UploadFile] = File(...)) -> dict[str, 
                     continue
                 if int(getattr(ds, "SamplesPerPixel", 1)) != 1:
                     raise ValueError("Les coupes couleur ou multi-échantillons ne sont pas prises en charge.")
-                rows, columns = int(ds.Rows), int(ds.Columns)
-                parsed.append((ds, upload.filename))
-                dimensions.add((rows, columns))
-                uid = str(getattr(ds, "SeriesInstanceUID", ""))
-                if uid:
-                    series_uids.add(uid)
+                series_uid = str(getattr(ds, "SeriesInstanceUID", "")).strip() or "unknown"
+                parsed.setdefault(series_uid, []).append((ds, upload.filename))
             except HTTPException:
                 raise
             except Exception as exc:
@@ -228,34 +222,43 @@ async def upload_dicom_series(files: list[UploadFile] = File(...)) -> dict[str, 
 
     if not parsed:
         raise HTTPException(status_code=400, detail="Aucun fichier DICOM avec pixels n’a été trouvé.")
-    if len(series_uids) > 1:
-        raise HTTPException(status_code=400, detail="Les fichiers sélectionnés appartiennent à plusieurs séries DICOM.")
-    if len(dimensions) != 1:
-        raise HTTPException(status_code=400, detail="Les coupes n’ont pas toutes les mêmes dimensions.")
 
-    parsed.sort(key=lambda item: _sort_key(item[0]))
-    rows, columns = next(iter(dimensions))
-    spacing = getattr(parsed[0][0], "PixelSpacing", [1.0, 1.0])
-    slice_positions = [_sort_key(ds) for ds, _ in parsed]
-    gaps = [abs(b - a) for a, b in zip(slice_positions, slice_positions[1:]) if abs(b - a) > 1e-5]
-    slice_spacing = float(np.median(gaps)) if gaps else float(getattr(parsed[0][0], "SliceThickness", 1.0))
+    series_results: list[dict[str, Any]] = []
+    for series_uid, series_files in parsed.items():
+        series_dimensions = {(int(ds.Rows), int(ds.Columns)) for ds, _ in series_files}
+        if len(series_dimensions) != 1:
+            raise HTTPException(status_code=400, detail="Les coupes d’une même série n’ont pas toutes les mêmes dimensions.")
 
-    slices: list[dict[str, Any]] = []
-    for ds, filename in parsed:
-        try:
-            slices.append({"file_name": filename, "position": _sort_key(ds), "image_data": _preview_png(ds)})
-        except Exception as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Impossible de décoder les pixels de {filename}. Vérifiez la compression DICOM et ses codecs : {exc}",
-            ) from exc
+        series_files.sort(key=lambda item: _sort_key(item[0]))
+        rows, columns = next(iter(series_dimensions))
+        spacing = getattr(series_files[0][0], "PixelSpacing", [1.0, 1.0])
+        slice_positions = [_sort_key(ds) for ds, _ in series_files]
+        gaps = [abs(b - a) for a, b in zip(slice_positions, slice_positions[1:]) if abs(b - a) > 1e-5]
+        slice_spacing = float(np.median(gaps)) if gaps else float(getattr(series_files[0][0], "SliceThickness", 1.0))
+
+        slices: list[dict[str, Any]] = []
+        for ds, filename in series_files:
+            try:
+                slices.append({"file_name": filename, "position": _sort_key(ds), "image_data": _preview_png(ds)})
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Impossible de décoder les pixels de {filename}. Vérifiez la compression DICOM et ses codecs : {exc}",
+                ) from exc
+
+        first_dataset = series_files[0][0]
+        series_results.append({
+            "series_id": f"SER-{uuid.uuid4().hex[:12]}",
+            "series_number": str(getattr(first_dataset, "SeriesNumber", "")),
+            "series_description": str(getattr(first_dataset, "SeriesDescription", "")).strip(),
+            "file_count": len(slices),
+            "dimensions": [columns, rows, len(slices)],
+            "spacing_mm": [float(spacing[0]), float(spacing[1]), slice_spacing],
+            "slices": slices,
+        })
 
     return {
-        "series_id": f"SER-{uuid.uuid4().hex[:12]}",
-        "file_count": len(slices),
-        "dimensions": [columns, rows, len(slices)],
-        "spacing_mm": [float(spacing[0]), float(spacing[1]), slice_spacing],
-        "slices": slices,
+        "series": series_results,
         "notice": "Aperçu de visualisation uniquement ; pas un outil de diagnostic médical.",
     }
 
