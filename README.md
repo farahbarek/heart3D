@@ -1,7 +1,5 @@
 # heart3D
 
-Visualiseur web local pour explorer en 3D des images cardiaques DICOM, NIfTI et des séries de coupes.
-
 Ce dépôt contient désormais une base de projet Digital Twin pulmonaire avec :
 - un frontend React + TypeScript + Tailwind,
 - un backend FastAPI Python,
