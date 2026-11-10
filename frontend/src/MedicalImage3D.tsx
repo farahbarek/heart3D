@@ -75,7 +75,7 @@ export default function MedicalImage3D() {
       const formData = new FormData();
       files.forEach((file) => formData.append('files', file));
 
-      const response = await fetch('http://localhost:8000/api/imaging/series', {
+      const response = await fetch('/api/imaging/series', {
         method: 'POST',
         body: formData,
       });
@@ -118,7 +118,7 @@ export default function MedicalImage3D() {
           <ambientLight intensity={1.5} />
           <directionalLight position={[3, 4, 5]} intensity={1.5} />
           {series ? <SliceStack slices={series.slices} /> : <Placeholder />}
-          <OrbitControls enablePan enableZoom enableRotate minDistance={2.5} maxDistance={9} />
+          <OrbitControls />
         </Canvas>
         <div className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-lg bg-white/90 px-3 py-1.5 text-xs text-slate-700 shadow">
           {series

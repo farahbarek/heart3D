@@ -23,7 +23,7 @@ export default function App() {
   const [health, setHealth] = useState<any>(null);
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/health')
+    fetch('/api/health')
       .then((res) => {
         if (!res.ok) throw new Error('Backend unavailable');
         return res.json();
